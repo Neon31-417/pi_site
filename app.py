@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 import psycopg2.extras
@@ -172,3 +172,64 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+@app.route('/admin')
+def admin_page():
+    # This just loads the minimal HTML file
+    if session.get('role') != 'admin':
+        return redirect(url_for('login'))
+    return render_template('index.html')
+
+@app.route('/api/admin_data')
+def api_admin_data():
+    # Returns the active invites as JSON for Javascript to read
+    if session.get('role') != 'admin':
+        return jsonify({"error": "unauthorized"}), 403
+        
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT code FROM invites WHERE is_used = 0')
+    invites = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    
+    return jsonify({"invites": invites})
+
+@app.route('/api/generate_invite', methods=['POST'])
+def api_generate_invite():
+    if session.get('role') != 'admin':
+        return jsonify({"error": "unauthorized"}), 403
+        
+    new_invite = generate_random_code(6)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('INSERT INTO invites (code) VALUES (%s)', (new_invite,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    return jsonify({"success": True, "code": new_invite})
+
+@app.route('/api/approve_user', methods=['POST'])
+def api_approve_user():
+    if session.get('role') != 'admin':
+        return jsonify({"error": "unauthorized"}), 403
+        
+    c_code = request.form.get('confirm_code')
+    conn = get_db()
+    cur = conn.cursor()
+    
+    cur.execute('SELECT * FROM users WHERE confirm_code = %s AND is_approved = 0', (c_code,))
+    user = cur.fetchone()
+    
+    if user:
+        cur.execute('UPDATE users SET is_approved = 1 WHERE confirm_code = %s', (c_code,))
+        conn.commit()
+        message = "User unlocked successfully!"
+    else:
+        message = "Invalid confirmation code."
+        
+    cur.close()
+    conn.close()
+    
+    return jsonify({"message": message})
